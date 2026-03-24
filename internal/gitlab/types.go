@@ -35,6 +35,15 @@ const (
 	MaxPages = 1000
 )
 
+// IssueFilter holds optional filters for fetching issues.
+// All fields are optional; zero values mean "no filter".
+type IssueFilter struct {
+	Labels    string // Comma-separated label names (AND logic)
+	ProjectID int    // Filter to issues from this project (client-side, group mode only)
+	Milestone string // Milestone title
+	Assignee  string // Assignee username
+}
+
 // Client provides methods to interact with the GitLab REST API.
 type Client struct {
 	Token      string       // GitLab personal access token or OAuth token

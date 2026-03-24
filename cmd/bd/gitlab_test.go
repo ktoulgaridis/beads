@@ -148,6 +148,10 @@ func TestGitLabConfigEnvVar(t *testing.T) {
 		{"gitlab.project_id", "GITLAB_PROJECT_ID"},
 		{"gitlab.group_id", "GITLAB_GROUP_ID"},
 		{"gitlab.default_project_id", "GITLAB_DEFAULT_PROJECT_ID"},
+		{"gitlab.filter_labels", "GITLAB_FILTER_LABELS"},
+		{"gitlab.filter_project", "GITLAB_FILTER_PROJECT"},
+		{"gitlab.filter_milestone", "GITLAB_FILTER_MILESTONE"},
+		{"gitlab.filter_assignee", "GITLAB_FILTER_ASSIGNEE"},
 		{"gitlab.unknown", ""},
 	}
 
@@ -254,5 +258,89 @@ func TestGitLabCmdRegistration(t *testing.T) {
 	}
 	if !hasProjects {
 		t.Error("gitlabCmd missing 'projects' subcommand")
+	}
+}
+
+// TestBuildCLIFilter_NoFlags verifies nil when no flags set.
+func TestBuildCLIFilter_NoFlags(t *testing.T) {
+	// Save and restore global flag state
+	savedLabel, savedProject, savedMilestone, savedAssignee := gitlabFilterLabel, gitlabFilterProject, gitlabFilterMilestone, gitlabFilterAssignee
+	t.Cleanup(func() {
+		gitlabFilterLabel, gitlabFilterProject, gitlabFilterMilestone, gitlabFilterAssignee = savedLabel, savedProject, savedMilestone, savedAssignee
+	})
+
+	gitlabFilterLabel = ""
+	gitlabFilterProject = ""
+	gitlabFilterMilestone = ""
+	gitlabFilterAssignee = ""
+
+	filter := buildCLIFilter()
+	if filter != nil {
+		t.Errorf("buildCLIFilter() = %+v, want nil when no flags set", filter)
+	}
+}
+
+// TestBuildCLIFilter_WithFlags verifies filter is built from flags.
+func TestBuildCLIFilter_WithFlags(t *testing.T) {
+	savedLabel, savedProject, savedMilestone, savedAssignee := gitlabFilterLabel, gitlabFilterProject, gitlabFilterMilestone, gitlabFilterAssignee
+	t.Cleanup(func() {
+		gitlabFilterLabel, gitlabFilterProject, gitlabFilterMilestone, gitlabFilterAssignee = savedLabel, savedProject, savedMilestone, savedAssignee
+	})
+
+	gitlabFilterLabel = "bug,backend"
+	gitlabFilterProject = "42"
+	gitlabFilterMilestone = "Sprint 1"
+	gitlabFilterAssignee = "kyriakos"
+
+	filter := buildCLIFilter()
+	if filter == nil {
+		t.Fatal("buildCLIFilter() = nil, want non-nil")
+	}
+	if filter.Labels != "bug,backend" {
+		t.Errorf("Labels = %q, want %q", filter.Labels, "bug,backend")
+	}
+	if filter.ProjectID != 42 {
+		t.Errorf("ProjectID = %d, want 42", filter.ProjectID)
+	}
+	if filter.Milestone != "Sprint 1" {
+		t.Errorf("Milestone = %q, want %q", filter.Milestone, "Sprint 1")
+	}
+	if filter.Assignee != "kyriakos" {
+		t.Errorf("Assignee = %q, want %q", filter.Assignee, "kyriakos")
+	}
+}
+
+// TestBuildCLIFilter_PartialFlags verifies filter works with some flags.
+func TestBuildCLIFilter_PartialFlags(t *testing.T) {
+	savedLabel, savedProject, savedMilestone, savedAssignee := gitlabFilterLabel, gitlabFilterProject, gitlabFilterMilestone, gitlabFilterAssignee
+	t.Cleanup(func() {
+		gitlabFilterLabel, gitlabFilterProject, gitlabFilterMilestone, gitlabFilterAssignee = savedLabel, savedProject, savedMilestone, savedAssignee
+	})
+
+	gitlabFilterLabel = "frontend"
+	gitlabFilterProject = ""
+	gitlabFilterMilestone = ""
+	gitlabFilterAssignee = ""
+
+	filter := buildCLIFilter()
+	if filter == nil {
+		t.Fatal("buildCLIFilter() = nil, want non-nil")
+	}
+	if filter.Labels != "frontend" {
+		t.Errorf("Labels = %q, want %q", filter.Labels, "frontend")
+	}
+	if filter.ProjectID != 0 {
+		t.Errorf("ProjectID = %d, want 0", filter.ProjectID)
+	}
+}
+
+// TestSyncCmdHasFilterFlags verifies filter flags are registered on sync command.
+func TestSyncCmdHasFilterFlags(t *testing.T) {
+	flags := []string{"label", "project", "milestone", "assignee"}
+	for _, name := range flags {
+		f := gitlabSyncCmd.Flags().Lookup(name)
+		if f == nil {
+			t.Errorf("sync command missing --%s flag", name)
+		}
 	}
 }

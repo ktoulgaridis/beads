@@ -27,6 +27,7 @@ type Tracker struct {
 	client *Client
 	config *MappingConfig
 	store  storage.Storage
+	filter *IssueFilter // Optional filters for issue fetching
 }
 
 func (t *Tracker) Name() string         { return "gitlab" }
@@ -69,7 +70,42 @@ func (t *Tracker) Init(ctx context.Context, store storage.Storage) error {
 		t.client = t.client.WithGroupID(groupID)
 	}
 	t.config = DefaultMappingConfig()
+
+	// Load optional filter config
+	t.filter = t.loadFilterConfig(ctx)
+
 	return nil
+}
+
+// loadFilterConfig reads filter configuration from store/env.
+// Returns nil if no filters are configured.
+func (t *Tracker) loadFilterConfig(ctx context.Context) *IssueFilter {
+	labels, _ := t.getConfig(ctx, "gitlab.filter_labels", "GITLAB_FILTER_LABELS")
+	projectStr, _ := t.getConfig(ctx, "gitlab.filter_project", "GITLAB_FILTER_PROJECT")
+	milestone, _ := t.getConfig(ctx, "gitlab.filter_milestone", "GITLAB_FILTER_MILESTONE")
+	assignee, _ := t.getConfig(ctx, "gitlab.filter_assignee", "GITLAB_FILTER_ASSIGNEE")
+
+	if labels == "" && projectStr == "" && milestone == "" && assignee == "" {
+		return nil
+	}
+
+	filter := &IssueFilter{
+		Labels:    labels,
+		Milestone: milestone,
+		Assignee:  assignee,
+	}
+	if projectStr != "" {
+		if pid, err := strconv.Atoi(projectStr); err == nil {
+			filter.ProjectID = pid
+		}
+	}
+	return filter
+}
+
+// SetFilter overrides the tracker's issue filter.
+// CLI flags use this to override config-based defaults.
+func (t *Tracker) SetFilter(filter *IssueFilter) {
+	t.filter = filter
 }
 
 func (t *Tracker) Validate() error {
@@ -95,9 +131,9 @@ func (t *Tracker) FetchIssues(ctx context.Context, opts tracker.FetchOptions) ([
 	}
 
 	if opts.Since != nil {
-		issues, err = t.client.FetchIssuesSince(ctx, state, *opts.Since)
+		issues, err = t.client.FetchIssuesSince(ctx, state, *opts.Since, t.filter)
 	} else {
-		issues, err = t.client.FetchIssues(ctx, state)
+		issues, err = t.client.FetchIssues(ctx, state, t.filter)
 	}
 	if err != nil {
 		return nil, err

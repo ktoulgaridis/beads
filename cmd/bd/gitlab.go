@@ -78,6 +78,12 @@ var (
 	gitlabPreferLocal  bool
 	gitlabPreferGitLab bool
 	gitlabPreferNewer  bool
+
+	// Filter flags for sync
+	gitlabFilterLabel     string
+	gitlabFilterProject   string
+	gitlabFilterMilestone string
+	gitlabFilterAssignee  string
 )
 
 // issueIDCounter is used to generate unique issue IDs.
@@ -175,6 +181,12 @@ func init() {
 	gitlabSyncCmd.Flags().BoolVar(&gitlabPreferGitLab, "prefer-gitlab", false, "On conflict, use GitLab version")
 	gitlabSyncCmd.Flags().BoolVar(&gitlabPreferNewer, "prefer-newer", false, "On conflict, use most recent version (default)")
 
+	// Filter flags (override config defaults)
+	gitlabSyncCmd.Flags().StringVar(&gitlabFilterLabel, "label", "", "Filter by labels (comma-separated, AND logic)")
+	gitlabSyncCmd.Flags().StringVar(&gitlabFilterProject, "project", "", "Filter to issues from this project ID (group mode)")
+	gitlabSyncCmd.Flags().StringVar(&gitlabFilterMilestone, "milestone", "", "Filter by milestone title")
+	gitlabSyncCmd.Flags().StringVar(&gitlabFilterAssignee, "assignee", "", "Filter by assignee username")
+
 	// Register gitlab command with root
 	rootCmd.AddCommand(gitlabCmd)
 }
@@ -236,6 +248,14 @@ func gitlabConfigToEnvVar(key string) string {
 		return "GITLAB_GROUP_ID"
 	case "gitlab.default_project_id":
 		return "GITLAB_DEFAULT_PROJECT_ID"
+	case "gitlab.filter_labels":
+		return "GITLAB_FILTER_LABELS"
+	case "gitlab.filter_project":
+		return "GITLAB_FILTER_PROJECT"
+	case "gitlab.filter_milestone":
+		return "GITLAB_FILTER_MILESTONE"
+	case "gitlab.filter_assignee":
+		return "GITLAB_FILTER_ASSIGNEE"
 	default:
 		return ""
 	}
@@ -302,6 +322,28 @@ func runGitLabStatus(cmd *cobra.Command, args []string) error {
 		}
 	} else {
 		_, _ = fmt.Fprintf(out, "Sync Mode:  project\n")
+	}
+
+	// Show configured filters
+	ctx := context.Background()
+	filterLabels := getGitLabConfigValue(ctx, "gitlab.filter_labels")
+	filterProject := getGitLabConfigValue(ctx, "gitlab.filter_project")
+	filterMilestone := getGitLabConfigValue(ctx, "gitlab.filter_milestone")
+	filterAssignee := getGitLabConfigValue(ctx, "gitlab.filter_assignee")
+	if filterLabels != "" || filterProject != "" || filterMilestone != "" || filterAssignee != "" {
+		_, _ = fmt.Fprintf(out, "\nFilters:\n")
+		if filterLabels != "" {
+			_, _ = fmt.Fprintf(out, "  Labels:    %s\n", filterLabels)
+		}
+		if filterProject != "" {
+			_, _ = fmt.Fprintf(out, "  Project:   %s\n", filterProject)
+		}
+		if filterMilestone != "" {
+			_, _ = fmt.Fprintf(out, "  Milestone: %s\n", filterMilestone)
+		}
+		if filterAssignee != "" {
+			_, _ = fmt.Fprintf(out, "  Assignee:  %s\n", filterAssignee)
+		}
 	}
 
 	// Validate configuration
@@ -383,6 +425,11 @@ func runGitLabSync(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("initializing GitLab tracker: %w", err)
 	}
 
+	// Apply CLI filter overrides (take precedence over config defaults)
+	if cliFilter := buildCLIFilter(); cliFilter != nil {
+		gt.SetFilter(cliFilter)
+	}
+
 	// Create the sync engine
 	engine := tracker.NewEngine(gt, store, actor)
 	engine.OnMessage = func(msg string) { _, _ = fmt.Fprintln(out, "  "+msg) }
@@ -443,6 +490,26 @@ func runGitLabSync(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// buildCLIFilter constructs an IssueFilter from CLI flags.
+// Returns nil if no filter flags were provided.
+func buildCLIFilter() *gitlab.IssueFilter {
+	if gitlabFilterLabel == "" && gitlabFilterProject == "" &&
+		gitlabFilterMilestone == "" && gitlabFilterAssignee == "" {
+		return nil
+	}
+	filter := &gitlab.IssueFilter{
+		Labels:    gitlabFilterLabel,
+		Milestone: gitlabFilterMilestone,
+		Assignee:  gitlabFilterAssignee,
+	}
+	if gitlabFilterProject != "" {
+		if pid, err := strconv.Atoi(gitlabFilterProject); err == nil {
+			filter.ProjectID = pid
+		}
+	}
+	return filter
 }
 
 // buildGitLabPullHooks creates PullHooks for GitLab-specific pull behavior.

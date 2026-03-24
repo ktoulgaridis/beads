@@ -166,9 +166,46 @@ func (c *Client) doRequest(ctx context.Context, method, urlStr string, body inte
 	return nil, nil, fmt.Errorf("max retries (%d) exceeded: %w", MaxRetries+1, lastErr)
 }
 
-// FetchIssues retrieves issues from GitLab with optional filtering by state.
+// applyFilter adds IssueFilter fields as query parameters to the params map.
+// ProjectID filtering is done client-side (not supported by GitLab API on group endpoints).
+func applyFilter(params map[string]string, filter *IssueFilter) {
+	if filter == nil {
+		return
+	}
+	if filter.Labels != "" {
+		params["labels"] = filter.Labels
+	}
+	if filter.Milestone != "" {
+		params["milestone"] = filter.Milestone
+	}
+	if filter.Assignee != "" {
+		params["assignee_username"] = filter.Assignee
+	}
+}
+
+// filterByProject removes issues that don't match the filter's ProjectID.
+// Returns the input slice unmodified if filter is nil or ProjectID is 0.
+func filterByProject(issues []Issue, filter *IssueFilter) []Issue {
+	if filter == nil || filter.ProjectID == 0 {
+		return issues
+	}
+	filtered := make([]Issue, 0, len(issues))
+	for _, issue := range issues {
+		if issue.ProjectID == filter.ProjectID {
+			filtered = append(filtered, issue)
+		}
+	}
+	return filtered
+}
+
+// FetchIssues retrieves issues from GitLab with optional filtering by state and IssueFilter.
 // state can be: "opened", "closed", or "all".
-func (c *Client) FetchIssues(ctx context.Context, state string) ([]Issue, error) {
+func (c *Client) FetchIssues(ctx context.Context, state string, filters ...*IssueFilter) ([]Issue, error) {
+	var filter *IssueFilter
+	if len(filters) > 0 {
+		filter = filters[0]
+	}
+
 	var allIssues []Issue
 	page := 1
 
@@ -187,6 +224,7 @@ func (c *Client) FetchIssues(ctx context.Context, state string) ([]Issue, error)
 		if state != "" && state != "all" {
 			params["state"] = state
 		}
+		applyFilter(params, filter)
 
 		urlStr := c.buildURL(c.issuesBasePath(), params)
 		respBody, headers, err := c.doRequest(ctx, http.MethodGet, urlStr, nil)
@@ -214,12 +252,17 @@ func (c *Client) FetchIssues(ctx context.Context, state string) ([]Issue, error)
 		}
 	}
 
-	return allIssues, nil
+	return filterByProject(allIssues, filter), nil
 }
 
 // FetchIssuesSince retrieves issues from GitLab that have been updated since the given time.
 // This enables incremental sync by only fetching issues modified after the last sync.
-func (c *Client) FetchIssuesSince(ctx context.Context, state string, since time.Time) ([]Issue, error) {
+func (c *Client) FetchIssuesSince(ctx context.Context, state string, since time.Time, filters ...*IssueFilter) ([]Issue, error) {
+	var filter *IssueFilter
+	if len(filters) > 0 {
+		filter = filters[0]
+	}
+
 	var allIssues []Issue
 	page := 1
 
@@ -241,6 +284,7 @@ func (c *Client) FetchIssuesSince(ctx context.Context, state string, since time.
 		if state != "" && state != "all" {
 			params["state"] = state
 		}
+		applyFilter(params, filter)
 
 		urlStr := c.buildURL(c.issuesBasePath(), params)
 		respBody, headers, err := c.doRequest(ctx, http.MethodGet, urlStr, nil)
@@ -268,7 +312,7 @@ func (c *Client) FetchIssuesSince(ctx context.Context, state string, since time.
 		}
 	}
 
-	return allIssues, nil
+	return filterByProject(allIssues, filter), nil
 }
 
 // CreateIssue creates a new issue in GitLab.
