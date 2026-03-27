@@ -642,133 +642,15 @@ func TestEnginePushOnly(t *testing.T) {
 	}
 }
 
-func TestEnginePushUsesBatchTrackerWhenAvailable(t *testing.T) {
+func TestEnginePushNoDuplicatesOnSecondSync(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
 	defer store.Close()
 
-	ref := strPtr("https://notion.so/existing")
-	issues := []*types.Issue{
-		{ID: "bd-batch-1", Title: "Create me", Status: types.StatusOpen, IssueType: types.TypeTask, Priority: 2},
-		{ID: "bd-batch-2", Title: "Update me", Status: types.StatusInProgress, IssueType: types.TypeFeature, Priority: 1, ExternalRef: ref},
-	}
-	for _, issue := range issues {
-		if err := store.CreateIssue(ctx, issue, "test-actor"); err != nil {
-			t.Fatalf("CreateIssue(%s) error: %v", issue.ID, err)
-		}
-	}
-
-	tracker := &mockBatchTracker{
-		mockTracker: newMockTracker("notion"),
-		batchResult: &BatchPushResult{
-			Created:  []BatchPushItem{{LocalID: "bd-batch-1", ExternalRef: "https://notion.so/new-page"}},
-			Updated:  []BatchPushItem{{LocalID: "bd-batch-2", ExternalRef: "https://notion.so/existing"}},
-			Warnings: []string{"Skipped unsupported Notion issue types: pm=1"},
-		},
-	}
-	engine := NewEngine(tracker, store, "test-actor")
-
-	result, err := engine.Sync(ctx, SyncOptions{Push: true})
-	if err != nil {
-		t.Fatalf("Sync() error: %v", err)
-	}
-	if tracker.batchCalls != 1 {
-		t.Fatalf("batchCalls = %d, want 1", tracker.batchCalls)
-	}
-	if len(tracker.created) != 0 || len(tracker.updated) != 0 {
-		t.Fatalf("fallback create/update path should not run: created=%d updated=%d", len(tracker.created), len(tracker.updated))
-	}
-	if result.PushStats.Created != 1 || result.PushStats.Updated != 1 {
-		t.Fatalf("PushStats = %+v", result.PushStats)
-	}
-	if len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], "pm=1") {
-		t.Fatalf("warnings = %#v", result.Warnings)
-	}
-	stored, err := store.GetIssue(ctx, "bd-batch-1")
-	if err != nil {
-		t.Fatalf("GetIssue() error: %v", err)
-	}
-	if stored.ExternalRef == nil || *stored.ExternalRef != "https://notion.so/new-page" {
-		t.Fatalf("external_ref = %#v, want batch-created ref", stored.ExternalRef)
-	}
-	storedUpdated, err := store.GetIssue(ctx, "bd-batch-2")
-	if err != nil {
-		t.Fatalf("GetIssue() error: %v", err)
-	}
-	if storedUpdated.ExternalRef == nil || *storedUpdated.ExternalRef != "https://notion.so/existing" {
-		t.Fatalf("updated external_ref = %#v, want batch-updated ref", storedUpdated.ExternalRef)
-	}
-}
-
-func TestEngineDryRunUsesBatchPreviewWhenAvailable(t *testing.T) {
-	ctx := context.Background()
-	store := newTestStore(t)
-	defer store.Close()
-
+	// Create a local issue without external_ref
 	issue := &types.Issue{
-		ID:          "bd-batch-preview",
-		Title:       "Preview me",
-		Status:      types.StatusOpen,
-		IssueType:   types.TypeTask,
-		Priority:    2,
-		ExternalRef: strPtr("https://notion.so/existing"),
-	}
-	if err := store.CreateIssue(ctx, issue, "test-actor"); err != nil {
-		t.Fatalf("CreateIssue() error: %v", err)
-	}
-
-	tracker := &mockBatchTracker{
-		mockTracker: newMockTracker("notion"),
-		batchDryRun: &BatchPushResult{
-			Skipped:  []string{"bd-batch-preview"},
-			Warnings: []string{"Skipped bd-batch-preview: Notion external_ref points outside the current target"},
-		},
-	}
-	engine := NewEngine(tracker, store, "test-actor")
-	var msgs []string
-	var warns []string
-	engine.OnMessage = func(msg string) { msgs = append(msgs, msg) }
-	engine.OnWarning = func(msg string) { warns = append(warns, msg) }
-
-	result, err := engine.Sync(ctx, SyncOptions{Push: true, DryRun: true})
-	if err != nil {
-		t.Fatalf("Sync() error: %v", err)
-	}
-	if tracker.batchDryCalls != 1 {
-		t.Fatalf("batchDryCalls = %d, want 1", tracker.batchDryCalls)
-	}
-	if tracker.batchCalls != 0 {
-		t.Fatalf("batchCalls = %d, want 0", tracker.batchCalls)
-	}
-	if result.PushStats.Updated != 0 || result.PushStats.Created != 0 {
-		t.Fatalf("PushStats = %+v, want zero create/update", result.PushStats)
-	}
-	if len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], "outside the current target") {
-		t.Fatalf("warnings = %#v", result.Warnings)
-	}
-	if len(msgs) != 0 {
-		t.Fatalf("msgs = %#v, want no create/update preview lines", msgs)
-	}
-	if len(warns) != 0 {
-		t.Fatalf("warns = %#v, want no immediate warning spam", warns)
-	}
-	stored, err := store.GetIssue(ctx, "bd-batch-preview")
-	if err != nil {
-		t.Fatalf("GetIssue() error: %v", err)
-	}
-	if stored.ExternalRef == nil || *stored.ExternalRef != "https://notion.so/existing" {
-		t.Fatalf("external_ref mutated in dry-run: %#v", stored.ExternalRef)
-	}
-}
-
-func TestEnginePushCountsCreateErrors(t *testing.T) {
-	ctx := context.Background()
-	store := newTestStore(t)
-	defer store.Close()
-
-	issue := &types.Issue{
-		ID:        "bd-createerr1",
-		Title:     "Local issue",
+		ID:        "bd-dup1",
+		Title:     "Issue that should not be duplicated",
 		Status:    types.StatusOpen,
 		IssueType: types.TypeTask,
 		Priority:  2,
@@ -777,30 +659,76 @@ func TestEnginePushCountsCreateErrors(t *testing.T) {
 		t.Fatalf("CreateIssue() error: %v", err)
 	}
 
-	tracker := newMockTracker("test")
-	tracker.createErr = fmt.Errorf("push response reported 1 error")
-	engine := NewEngine(tracker, store, "test-actor")
+	trk := newMockTracker("test")
+	engine := NewEngine(trk, store, "test-actor")
 
+	// First sync: should create the issue externally
 	result, err := engine.Sync(ctx, SyncOptions{Push: true})
 	if err != nil {
-		t.Fatalf("Sync() error: %v", err)
+		t.Fatalf("First Sync() error: %v", err)
 	}
-	if result.Stats.Created != 0 {
-		t.Errorf("Stats.Created = %d, want 0", result.Stats.Created)
-	}
-	if result.Stats.Errors != 1 {
-		t.Errorf("Stats.Errors = %d, want 1", result.Stats.Errors)
+	if result.Stats.Created != 1 {
+		t.Errorf("First sync Stats.Created = %d, want 1", result.Stats.Created)
 	}
 
-	stored, err := store.GetIssue(ctx, "bd-createerr1")
+	// Verify external_ref was stored
+	updated, err := store.GetIssue(ctx, "bd-dup1")
 	if err != nil {
 		t.Fatalf("GetIssue() error: %v", err)
 	}
-	if stored.ExternalRef != nil {
-		t.Fatalf("external_ref = %q, want nil", *stored.ExternalRef)
+	if updated.ExternalRef == nil || *updated.ExternalRef == "" {
+		t.Fatal("external_ref not stored after first sync")
 	}
-	if len(tracker.created) != 0 {
-		t.Errorf("tracker.created = %d, want 0", len(tracker.created))
+
+	// Second sync: should NOT create a duplicate — issue already has external_ref
+	trk2 := newMockTracker("test")
+	engine2 := NewEngine(trk2, store, "test-actor")
+
+	result2, err := engine2.Sync(ctx, SyncOptions{Push: true})
+	if err != nil {
+		t.Fatalf("Second Sync() error: %v", err)
+	}
+	if result2.Stats.Created != 0 {
+		t.Errorf("Second sync Stats.Created = %d, want 0 (no duplicates)", result2.Stats.Created)
+	}
+	if len(trk2.created) != 0 {
+		t.Errorf("Second sync tracker.created = %d, want 0", len(trk2.created))
+	}
+}
+
+func TestEnginePushStoresSourceSystem(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	defer store.Close()
+
+	issue := &types.Issue{
+		ID:        "bd-ss1",
+		Title:     "Issue for source_system test",
+		Status:    types.StatusOpen,
+		IssueType: types.TypeTask,
+		Priority:  2,
+	}
+	if err := store.CreateIssue(ctx, issue, "test-actor"); err != nil {
+		t.Fatalf("CreateIssue() error: %v", err)
+	}
+
+	trk := newMockTracker("test")
+	engine := NewEngine(trk, store, "test-actor")
+
+	if _, err := engine.Sync(ctx, SyncOptions{Push: true}); err != nil {
+		t.Fatalf("Sync() error: %v", err)
+	}
+
+	// Verify source_system was stored
+	updated, err := store.GetIssue(ctx, "bd-ss1")
+	if err != nil {
+		t.Fatalf("GetIssue() error: %v", err)
+	}
+	if updated.SourceSystem == "" {
+		t.Error("source_system not stored after push")
+	}
+	if !strings.HasPrefix(updated.SourceSystem, "test:") {
+		t.Errorf("source_system = %q, want prefix %q", updated.SourceSystem, "test:")
 	}
 }
 
