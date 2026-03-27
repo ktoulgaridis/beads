@@ -14,15 +14,25 @@ import (
 )
 
 // GetIssueByExternalRefInTx looks up an issue by its external_ref field.
+// Checks both the issues and wisps tables so that ephemeral issues are found.
 // Returns the issue ID if found. Returns storage.ErrNotFound (wrapped) if not found.
 func GetIssueByExternalRefInTx(ctx context.Context, tx *sql.Tx, externalRef string) (string, error) {
 	var id string
 	err := tx.QueryRowContext(ctx, "SELECT id FROM issues WHERE external_ref = ?", externalRef).Scan(&id)
+	if err == nil {
+		return id, nil
+	}
+	if err != sql.ErrNoRows {
+		return "", fmt.Errorf("get issue by external_ref: %w", err)
+	}
+
+	// Fall through to wisps table.
+	err = tx.QueryRowContext(ctx, "SELECT id FROM wisps WHERE external_ref = ?", externalRef).Scan(&id)
 	if err == sql.ErrNoRows {
 		return "", fmt.Errorf("%w: external_ref %s", storage.ErrNotFound, externalRef)
 	}
 	if err != nil {
-		return "", fmt.Errorf("get issue by external_ref: %w", err)
+		return "", fmt.Errorf("get wisp by external_ref: %w", err)
 	}
 	return id, nil
 }
