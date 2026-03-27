@@ -19,8 +19,8 @@ func init() {
 	})
 }
 
-// issueIIDPattern matches GitLab issue URLs: .../issues/42
-var issueIIDPattern = regexp.MustCompile(`/issues/(\d+)`)
+// issueIIDPattern matches GitLab issue/work_item URLs: .../issues/42 or .../work_items/42
+var issueIIDPattern = regexp.MustCompile(`/(?:issues|work_items)/(\d+)`)
 
 // Tracker implements tracker.IssueTracker for GitLab.
 type Tracker struct {
